@@ -83,6 +83,8 @@ Adminlar `/admin` buyrug'i yoki menyudagi **👑 Admin Panel** tugmasi orqali ki
 | **🗑 Audioni o'chirish** | Faqat yuklangan darslar ko'rsatiladi; tanlansa yozuv bazadan o'chadi, o'quvchilarga yana «tez orada yuklanadi» chiqadi. |
 | **📊 Statistika** | Jami foydalanuvchilar, bugun qo'shilganlar, yuklangan audiolar (`28/34`), qolganlar va to'liqlik foizi. |
 | **📢 Xabar tarqatish** | FSM orqali matn/rasm/video/fayl/audio qabul qilinadi va **barcha** foydalanuvchilarga nusxalanadi. Natija: `✅ Muvaffaqiyatli: N`, `❌ Yetkazilmadi: M`. Flood limitiga qarshi pauza va `RetryAfter` ushlash mavjud. |
+| **💾 Bazani yuklab olish (Backup)** | Joriy SQLite baza izchil nusxalanib (`VACUUM INTO` — WAL rejimida ham xavfsiz), Telegram'ga `.db` hujjat sifatida yuboriladi. Izohda sana/vaqt (GMT+5), foydalanuvchilar va yuklangan audiolar soni bo'ladi — faylni «Saqlangan xabarlar» ga saqlab qo'yish mumkin. |
+| **🔄 Bazani qayta tiklash (Restore)** | FSM: ogohlantirish chiqadi → admin `.db` faylni yuboradi → bot faylni tekshiradi (`integrity_check` + kerakli jadvallar), bazani almashtiradi va qayta ochadi. Natija: `✅ Baza muvaffaqiyatli tiklandi!` va barcha foydalanuvchilar hamda 34 darsning audio `file_id` lari avvalgi holatiga qaytadi. Oldingi baza `bot.db.before-restore-<vaqt>` nomi bilan saqlanadi. |
 
 Qo'shimcha:
 
@@ -91,6 +93,13 @@ Qo'shimcha:
 - **Fayl yoki audio:** admin MP3 ni «Audio» sifatida yuborsa `file_id` to'g'ridan-to'g'ri
   saqlanadi; «Fayl (document)» sifatida yuborsa, bot uni bir marta qayta yuklab, haqiqiy
   *audio* `file_id` oladi (shunda keyinchalik yuborish ishonchli bo'ladi). Fayl cheklovi: 20 MB.
+- **Backup/restore tafsilotlari:** backup `VACUUM INTO` bilan olinadi, shuning uchun WAL
+  jurnalidagi yozuvlar ham nusxaga tushadi. Restore'da fayl avval tekshiriladi
+  (`PRAGMA integrity_check` + `users`/`audios` jadvallari mavjudligi) — yaroqsiz fayl rad
+  etiladi va joriy bazaga tegilmaydi. Tiklash jarayonida eski baza
+  `bot.db.before-restore-<vaqt>` nomi bilan saqlanadi, yangi baza ochilmasa avtomatik qaytariladi.
+- **Vaqt mintaqasi:** backup izohidagi sana/vaqt `TZ_OFFSET_HOURS` (standart `5` = GMT+5)
+  bilan sozlanadi, masalan `.env` da `TZ_OFFSET_HOURS=3`.
 - **Bekor qilish:** istalgan payt `/bekor`.
 - **Xavfsizlik:** barcha admin handlerlari `ADMIN_IDS` filtri bilan himoyalangan; oddiy
   foydalanuvchi `/admin` yoki panel tugmasini bossa «❌ Bu bo'lim faqat adminlar uchun» oladi.
@@ -140,8 +149,9 @@ bir dars uchun yozuv `UPSERT` bilan yangilanadi (takrorlanmaydi).
 
 - **Darsning aniq beti.** Izohdagi bet raqami standart `3`. Kitobdagi haqiqiy betlarni
   bilganingizda `lessons.py` dagi `LESSON_PAGES` lug'atini to'ldiring: `LESSON_PAGES = {12: 45}`.
-- **Zaxira nusxa.** Baza — bitta fayl: `cp bot.db bot.db.bak` (yoki `DB_PATH` ni boshqa joyga
-  qaratib, avtomatik zaxira qiling).
+- **Zaxira nusxa.** Eng qulay usul — bot ichidagi **💾 Bazani yuklab olish (Backup)**: fayl
+  Telegram'ga keladi va «Saqlangan xabarlar»da turadi. Serverdan ham olish mumkin:
+  `cp bot.db bot.db.bak` (WAL rejimida xavfsiz nusxa kerak bo'lsa `sqlite3 bot.db "VACUUM INTO 'zaxira.db'"`).
 - **Doimiy ishlash.** Serverda `systemd`, Docker yoki `screen`/`tmux` orqali uzluksiz ishga
   tushirish tavsiya etiladi (`Ctrl + C` botsiz qolmasin). Bulutda — quyidagi
   [Render bo'limi](#11-renderga-deploy-github-orqali).

@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import tempfile
+from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
@@ -19,20 +21,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardMarkup,
     Message,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import database as db
-from config import is_admin
-from lessons import (
-    LESSON_BY_NO,
-    LESSONS_SORTED,
-    TOTAL_LESSONS,
-    lesson_caption,
-    main_menu_kb,
-)
+from config import TZ_OFFSET_HOURS, is_admin, now_local
+from lessons import LESSON_BY_NO, LESSONS_SORTED, lesson_caption
 from ui import render, safe_answer
 
 logger = logging.getLogger(__name__)
@@ -52,6 +49,10 @@ class AdminAudio(StatesGroup):
 
 class AdminBroadcast(StatesGroup):
     waiting_message = State()
+
+
+class AdminBackup(StatesGroup):
+    waiting_db = State()
 
 
 class IsAdmin(BaseFilter):
@@ -111,6 +112,8 @@ def panel_kb() -> InlineKeyboardMarkup:
     kb.button(text="🗑 Audioni o'chirish", callback_data="a:del")
     kb.button(text="📊 Statistika", callback_data="a:stats")
     kb.button(text="📢 Xabar tarqatish", callback_data="a:bcast")
+    kb.button(text="💾 Bazani yuklab olish (Backup)", callback_data="a:backup")
+    kb.button(text="🔄 Bazani qayta tiklash (Restore)", callback_data="a:restore")
     kb.button(text="🏠 Bosh menyu", callback_data="home")
     kb.adjust(1)
     return kb.as_markup()
@@ -477,5 +480,164 @@ async def broadcast_wrong_type(message: Message) -> None:
         "⚠️ Iltimos, matn, rasm, video, fayl yoki audio yuboring "
         "(bir nechta media birgalikda yuborilsa, faqat birinchisi tarqatiladi).\n\n"
         "⬅️ Bekor qilish uchun /bekor yuboring.",
+        reply_markup=cancel_kb(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Bazani zaxiralash (backup) va tiklash (restore)
+# ---------------------------------------------------------------------------
+def backup_file_name() -> str:
+    """Masalan: bot_backup_2026-10-12_14-35-07.db"""
+    return f"bot_backup_{now_local().strftime('%Y-%m-%d_%H-%M-%S')}.db"
+
+
+def backup_caption(stats: dict[str, int], filename: str) -> str:
+    now = now_local()
+    return (
+        "💾 <b>Baza zaxirasi (backup)</b>\n\n"
+        f"🗓 Sana: <b>{now.strftime('%d.%m.%Y')}</b>\n"
+        f"🕒 Vaqt: <b>{now.strftime('%H:%M:%S')}</b> (GMT+{TZ_OFFSET_HOURS})\n"
+        f"👥 Foydalanuvchilar: <b>{stats['users']}</b> ta\n"
+        f"🎵 Yuklangan audiolar: <b>{stats['uploaded']}/{stats['total_lessons']}</b> ta\n"
+        f"📦 Fayl: <code>{filename}</code>\n\n"
+        "💡 Ushbu faylni «Saqlangan xabarlar» (Saved Messages) ga saqlab qo'ying — "
+        "kerak bo'lganda «🔄 Bazani qayta tiklash» orqali tiklaysiz."
+    )
+
+
+def restore_prompt_text(stats: dict[str, int]) -> str:
+    return (
+        "⚠️ <b>DIQQAT:</b> Yangi baza yuklansa, hozirgi ma'lumotlar almashtiriladi. "
+        "Iltimos, avval zaxiralangan <code>.db</code> faylni yuboring:\n\n"
+        f"👥 Hozirgi foydalanuvchilar: <b>{stats['users']}</b> ta\n"
+        f"🎵 Hozirgi audiolar: <b>{stats['uploaded']}/{stats['total_lessons']}</b> ta\n\n"
+        "📎 Fayl «💾 Bazani yuklab olish (Backup)» orqali olingan <code>.db</code> "
+        "bo'lishi kerak. Muvaffaqiyatli tiklangach, barcha foydalanuvchilar va "
+        "audio <code>file_id</code> lari avvalgi holatiga qaytadi.\n"
+        "⬅️ Bekor qilish uchun «Bekor qilish» tugmasini bosing yoki /bekor yuboring."
+    )
+
+
+def restore_success_text(info: dict[str, int], stats: dict[str, int], safety_name: str) -> str:
+    return (
+        "✅ <b>Baza muvaffaqiyatli tiklandi!</b>\n\n"
+        f"👥 Foydalanuvchilar: <b>{stats['users']}</b> ta\n"
+        f"🎵 Yuklangan audiolar: <b>{stats['uploaded']}/{stats['total_lessons']}</b> ta\n"
+        f"📦 Tiklangan zaxirada: {info['users']} foydalanuvchi, {info['audios']} audio\n\n"
+        f"🗂 Oldingi baza xavfsizlik uchun saqlandi: <code>{safety_name}</code>\n\n"
+        "Endi o'quvchilar tiklanganki darslarni hoziroq eshitishlari mumkin."
+    )
+
+
+@router.callback_query(IsAdmin(), F.data == "a:backup")
+async def cb_backup(callback: CallbackQuery) -> None:
+    """Joriy bazani vaqtinchalik faylga nusxalab, Telegram'ga hujjat sifatida yuboradi."""
+    message = callback.message
+    if not isinstance(message, Message):
+        return
+
+    await safe_answer(callback, "💾 Baza tayyorlanmoqda...")
+    stats = await db.get_stats()
+    filename = backup_file_name()
+
+    try:
+        # Vaqtinchalik katalog: fayl yuborilgach diskda qolib ketmaydi
+        with tempfile.TemporaryDirectory(prefix="bot-backup-") as tmp:
+            path = await db.create_backup(Path(tmp) / filename)
+            await message.answer_document(
+                document=FSInputFile(path, filename=filename),
+                caption=backup_caption(stats, filename),
+                reply_markup=panel_kb(),
+            )
+    except (TelegramAPIError, OSError) as error:
+        logger.exception("Backup yuborilmadi: %s", error)
+        await message.answer(
+            "❌ Bazani yuborishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+            reply_markup=panel_kb(),
+        )
+        return
+
+    logger.info("Baza zaxirasi yuborildi: %s (%d foydalanuvchi)", filename, stats["users"])
+
+
+@router.callback_query(IsAdmin(), F.data == "a:restore")
+async def cb_restore(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminBackup.waiting_db)
+    await safe_answer(callback)
+    await render(callback, restore_prompt_text(await db.get_stats()), cancel_kb())
+
+
+@router.message(IsAdmin(), AdminBackup.waiting_db, F.document)
+async def receive_backup_file(message: Message, state: FSMContext) -> None:
+    document = message.document
+    if document is None:  # pragma: no cover - F.document filtri kafolatlaydi
+        return
+
+    filename = document.file_name or "backup.db"
+    size_mb = (document.file_size or 0) / (1024 * 1024)
+    if size_mb > MAX_DOWNLOAD_MB:
+        await message.answer(
+            f"⚠️ Fayl hajmi juda katta (~{size_mb:.1f} MB). Telegram bot faylni "
+            f"{MAX_DOWNLOAD_MB} MB gacha qabul qiladi.",
+            reply_markup=cancel_kb(),
+        )
+        return
+
+    with tempfile.TemporaryDirectory(prefix="bot-restore-") as tmp:
+        incoming = Path(tmp) / "incoming.db"
+        try:
+            await message.bot.download(document.file_id, destination=incoming)
+        except TelegramAPIError as error:
+            logger.exception("Zaxira faylini yuklab bo'lmadi: %s", error)
+            await message.answer(
+                "❌ Faylni yuklab olishda xatolik yuz berdi. Iltimos, qayta yuboring.",
+                reply_markup=cancel_kb(),
+            )
+            return
+
+        try:
+            info = await db.inspect_backup(incoming)
+        except ValueError as error:
+            logger.warning("Yaroqsiz zaxira fayli rad etildi: %s", error)
+            await message.answer(
+                f"❌ Bu fayl yaroqli baza emas: <i>{error}</i>\n\n"
+                "Iltimos, bot «💾 Bazani yuklab olish (Backup)» orqali yuborgan "
+                "<code>.db</code> faylni yuboring.",
+                reply_markup=cancel_kb(),
+            )
+            return  # holat saqlanadi — admin qayta urinishi mumkin
+
+        try:
+            safety = await db.restore_from_file(incoming)
+        except Exception as error:  # noqa: BLE001 - xato foydalanuvchiga ko'rsatiladi
+            logger.exception("Bazani tiklab bo'lmadi: %s", error)
+            await state.clear()
+            await message.answer(
+                "❌ Bazani tiklashda xatolik yuz berdi. Eski baza o'z joyiga "
+                "qaytarildi, ma'lumotlar yo'qolmadi.",
+                reply_markup=panel_kb(),
+            )
+            return
+
+    await state.clear()
+    stats = await db.get_stats()
+    logger.info(
+        "Baza tiklandi: %s fayli orqali (%d foydalanuvchi, %d audio)",
+        filename,
+        stats["users"],
+        stats["uploaded"],
+    )
+    await message.answer(
+        restore_success_text(info, stats, safety.name),
+        reply_markup=panel_kb(),
+    )
+
+
+@router.message(IsAdmin(), AdminBackup.waiting_db, IsNotCommand())
+async def receive_backup_wrong_type(message: Message) -> None:
+    await message.answer(
+        "⚠️ Iltimos, zaxira bazani <b>hujjat</b> (<code>.db</code> fayl) sifatida "
+        "yuboring.\n\n" + restore_prompt_text(await db.get_stats()),
         reply_markup=cancel_kb(),
     )

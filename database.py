@@ -12,7 +12,10 @@ yuboradi.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -217,6 +220,106 @@ async def count_audios() -> int:
 # ---------------------------------------------------------------------------
 # Statistika
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Zaxiralash (backup) va tiklash (restore)
+# ---------------------------------------------------------------------------
+REQUIRED_TABLES: tuple[str, ...] = ("users", "audios")
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _inspect_backup(path: Path) -> dict[str, int]:
+    """Zaxira faylini tekshiradi (sinxron — `asyncio.to_thread` ichida chaqiriladi).
+
+    Returns: {"users": n, "audios": n}
+    Raises: ValueError — fayl baza emas, buzilgan yoki kerakli jadvallar yo'q.
+    """
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError("fayl bo'sh yoki mavjud emas")
+
+    try:
+        # read-only rejimda ochamiz: yaroqsiz fayl ustida hech narsa o'zgarmasin
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error as error:
+        raise ValueError(f"faylni ochib bo'lmadi: {error}") from error
+
+    try:
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
+        if not integrity or str(integrity[0]).lower() != "ok":
+            raise ValueError(f"baza butunligi buzilgan (integrity_check={integrity})")
+
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        missing = [name for name in REQUIRED_TABLES if name not in tables]
+        if missing:
+            raise ValueError(f"kerakli jadvallar yo'q: {', '.join(missing)}")
+
+        users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        audios = conn.execute("SELECT COUNT(*) FROM audios").fetchone()[0]
+        return {"users": int(users), "audios": int(audios)}
+    except sqlite3.DatabaseError as error:
+        raise ValueError(f"sqlite xatosi: {error}") from error
+    finally:
+        conn.close()
+
+
+async def inspect_backup(path: str | Path) -> dict[str, int]:
+    """Zaxira faylini asinxron tekshiradi (event loop bloklanmaydi)."""
+    return await asyncio.to_thread(_inspect_backup, Path(path))
+
+
+async def create_backup(destination: str | Path) -> Path:
+    """Bazaning izchil nusxasini yaratadi (`VACUUM INTO` — WAL rejimida ham xavfsiz)."""
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)  # VACUUM INTO mavjud fayl ustiga yozmaydi
+    await _db().execute("VACUUM INTO ?", (str(destination),))
+    return destination
+
+
+def _cleanup_old_copies(target: Path, keep: Path) -> None:
+    """Faqat oxirgi xavfsizlik nusxasini qoldiradi."""
+    for old in target.parent.glob(f"{target.name}.before-restore-*"):
+        if old != keep:
+            old.unlink(missing_ok=True)
+
+
+async def restore_from_file(source: str | Path) -> Path:
+    """Joriy bazani zaxira fayl bilan almashtiradi va qayta ochadi.
+
+    Xavfsizlik uchun almashtirishdan oldingi baza `<baza>.before-restore-<vaqt>`
+    nomi bilan saqlanadi; yangi baza ochilmasa, eski baza qaytariladi.
+
+    Returns: saqlangan eski baza faylining yo'li.
+    """
+    source = Path(source)
+    target = _db_path
+    safety = target.with_name(f"{target.name}.before-restore-{_stamp()}")
+
+    await close_db()
+    try:
+        if target.exists():
+            os.replace(target, safety)
+        # eski WAL jurnallari yangi faylga qo'shilib ketmasligi uchun o'chiramiz
+        for suffix in ("-wal", "-shm"):
+            Path(f"{target}{suffix}").unlink(missing_ok=True)
+        shutil.copyfile(source, target)
+        await init_db(target)
+    except Exception:
+        logger.exception("Bazani tiklashda xatolik — eski baza qaytarilmoqda")
+        await close_db()
+        target.unlink(missing_ok=True)
+        if safety.exists():
+            os.replace(safety, target)
+        await init_db(target)
+        raise
+
+    _cleanup_old_copies(target, keep=safety)
+    logger.info("Baza tiklandi: %s (eski nusxa: %s)", target, safety.name)
+    return safety
+
+
 async def get_stats() -> dict[str, int]:
     """Admin panel uchun qisqa statistika."""
     uploaded = await count_audios()

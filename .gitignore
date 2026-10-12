@@ -9,6 +9,9 @@ bot.db-wal
 *.db-journal
 *.sqlite3
 
+# Restore oldidan saqlanadigan xavfsizlik nusxalari
+*.before-restore-*
+
 # Python
 __pycache__/
 *.py[cod]
