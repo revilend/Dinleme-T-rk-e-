@@ -1,0 +1,25 @@
+# Maxfiy ma'lumotlar
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Muhit / test keshlari
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Muharrir fayllari
+.vscode/
+.idea/
+.DS_Store
+
+# Agar audio fayllar repoga qo'shilmasligi kerak bo'lsa, quyidagi qatorni
+# izohdan chiqaring:
+# audio/*.mp3

@@ -1,0 +1,29 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec)
+#
+# Bu bot long-polling rejimida ishlaydi va tashqaridan HTTP so'rov qabul
+# qilmaydi — shuning uchun Render'dagi to'g'ri xizmat turi: **Background Worker**
+# (web service emas, port ham kerak emas).
+#
+# Ishga tushirish: Render Dashboard -> New + -> Blueprint -> shu reponi tanlang.
+# BOT_TOKEN va ADMIN_IDS qiymatlari birinchi deplo'yda so'raladi (gitga tushmaydi).
+services:
+  - type: worker
+    name: turk-tili-a1-dinleme-bot
+    runtime: python
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
+    # Doimiy disk: SQLite baza (foydalanuvchilar + audio file_id lari) redeploy va
+    # restartlarda saqlanib qoladi. Faqat pullik compute planda ishlaydi.
+    disk:
+      name: bot-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: BOT_TOKEN
+        sync: false # Render dashboardida kiritiladi (maxfiy)
+      - key: ADMIN_IDS
+        sync: false # masalan: 123456789,987654321
+      - key: DB_PATH
+        value: /var/data/bot.db # doimiy disk ichidagi bazani ishlatamiz
