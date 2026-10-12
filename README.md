@@ -131,6 +131,8 @@ bir dars uchun yozuv `UPSERT` bilan yangilanadi (takrorlanmaydi).
 ├── ui.py               # Umumiy UI yordamchilari (xabar yangilash/tahrirlash)
 ├── requirements.txt    # aiogram, aiosqlite, python-dotenv
 ├── .env.example        # Sozlamalar namunasi
+├── render.yaml         # Render Blueprint (background worker + doimiy disk)
+├── .python-version     # Hosting uchun Python versiyasi (3.12)
 └── bot.db              # SQLite baza (ishga tushganda yaratiladi, gitga tushmaydi)
 ```
 
@@ -157,6 +159,7 @@ bir dars uchun yozuv `UPSERT` bilan yangilanadi (takrorlanmaydi).
 | Audio yuborilmaydi / `wrong file identifier` | Eski `file_id` yaroqsiz bo'lib qolgan — bot yozuvni avtomatik tozalaydi, admin qayta yuklashi kerak |
 | Hujjat (fayl) yuklanmayapti | Fayl 20 MB dan katta yoki MP3/M4A/OGG/WAV emas — siqib qayta yuboring |
 | Broadcast yetib bormayapti | Foydalanuvchi botni bloklagan (`❌` hisobida ko'rinadi) |
+| Logda `⚠️ ... ochilmadi ... Zaxira bazaga o'tildi` | Render'da doimiy disk ulanmagan — `bot-data` diskini `/var/data` ga ulang, aks holda userlar va `file_id` lar har deplo'yda yo'qoladi |
 
 ---
 
@@ -192,6 +195,9 @@ bir necha bosqichda bo'ladi:
 - Bepul variant kerak bo'lsa: kichik VPS (Hetzner, Oracle free tier), Railway, Fly.io yoki uy
   serveri — hammasida `python main.py` ni `systemd`/Docker bilan uzluksiz ishga tushiring.
 - Boshqa region kerak bo'lsa `render.yaml` dagi `region` (hozir `frankfurt`) qiymatini o'zgartiring.
+- **Baza ochilmasa bot yiqilmaydi:** agar `DB_PATH` papkasi yaratilmasa (masalan disk ulanmagan),
+  bot ogohlantirish yozib lokal `bot.db` ga o'tadi va ishlashda davom etadi — bunda baza saqlanmaydi,
+  shuning uchun logdagi ogohlantirishni ko'rsangiz diskni ulang.
 
 ### Yangilash
 

@@ -12,13 +12,20 @@ yuboradi.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
 
-from config import DB_PATH
+from config import BASE_DIR, DB_PATH
 from lessons import TOTAL_LESSONS
+
+logger = logging.getLogger(__name__)
+
+# Disk ulanmagan bo'lsa ishlatiladigan zaxira baza fayli (bepul Render web service kabi)
+FALLBACK_DB_PATH = BASE_DIR / "bot.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -53,14 +60,45 @@ def _db() -> aiosqlite.Connection:
     return _conn
 
 
+def _prepare_path(path: Path) -> Path:
+    """Baza uchun papkani tayyorlaydi va TAYYOR fayl yo'lini qaytaradi."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def effective_db_path() -> Path:
+    """Haqiqatda ishlatilayotgan baza fayli (zaxira rejimga o'tilgan bo'lishi mumkin)."""
+    return _db_path
+
+
 async def init_db(path: str | Path | None = None) -> None:
-    """Bazani ochadi va jadvallarni yaratadi (bir necha marta chaqirish xavfsiz)."""
+    """Bazani ochadi va jadvallarni yaratadi (bir necha marta chaqirish xavfsiz).
+
+    Agar `DB_PATH` papkasi yaratilmasa yoki faylni ochib bo'lmasa (masalan Render'da
+    doimiy disk ulanmagan bo'lsa), bot yiqilmaydi — lokal zaxira bazaga o'tadi va
+    ogohlantirish yozadi. Bu rejimda baza efemer bo'ladi: har deplo'yda tozalanadi.
+    """
     global _conn, _db_path
     if _conn is not None:
         return
-    _db_path = Path(path) if path else DB_PATH
-    _db_path.parent.mkdir(parents=True, exist_ok=True)
-    _conn = await aiosqlite.connect(_db_path)
+
+    requested = Path(path) if path else DB_PATH
+    try:
+        _db_path = _prepare_path(requested)
+        _conn = await aiosqlite.connect(_db_path)
+    except (OSError, sqlite3.OperationalError) as error:
+        if requested == FALLBACK_DB_PATH:
+            raise
+        logger.warning(
+            "⚠️ %s ochilmadi (%s). Zaxira bazaga o'tildi: %s — bu rejimda baza "
+            "deploy/restartda tozalanadi (doimiy disk ulash tavsiya etiladi).",
+            requested,
+            error,
+            FALLBACK_DB_PATH,
+        )
+        _db_path = _prepare_path(FALLBACK_DB_PATH)
+        _conn = await aiosqlite.connect(_db_path)
+
     _conn.row_factory = aiosqlite.Row
     await _conn.execute("PRAGMA journal_mode=WAL")
     await _conn.execute("PRAGMA foreign_keys=ON")

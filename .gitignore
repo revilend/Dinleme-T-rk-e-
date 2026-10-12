@@ -2,6 +2,13 @@
 .env
 .env.local
 
+# SQLite baza (ishga tushganda yaratiladi) va jurnal fayllari
+bot.db
+bot.db-shm
+bot.db-wal
+*.db-journal
+*.sqlite3
+
 # Python
 __pycache__/
 *.py[cod]

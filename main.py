@@ -29,7 +29,7 @@ from aiogram.types import BotCommand
 import database as db
 import handlers_admin
 import handlers_user
-from config import ADMIN_IDS, BOT_TOKEN, DB_PATH
+from config import ADMIN_IDS, BOT_TOKEN
 from lessons import TOTAL_LESSONS, MODULES
 
 logging.basicConfig(
@@ -54,7 +54,7 @@ async def main() -> None:
     stats = await db.get_stats()
     logger.info(
         "Baza tayyor: %s | foydalanuvchilar: %d | audiolar: %d/%d",
-        DB_PATH,
+        db.effective_db_path(),
         stats["users"],
         stats["uploaded"],
         stats["total_lessons"],
