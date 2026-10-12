@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from aiogram import F, Router
 from aiogram.enums import ChatAction
@@ -32,6 +33,28 @@ logger = logging.getLogger(__name__)
 
 router = Router(name="user")
 
+# QR kod orqali kirish: https://t.me/<bot>?start=a1_lesson_7 (1..34)
+DEEP_LINK_RE = re.compile(r"^a1_lesson_(\d{1,3})$", re.IGNORECASE)
+
+
+def deep_link_payload(text: str | None) -> str | None:
+    """`/start a1_lesson_7` -> `a1_lesson_7`; payload yo'q bo'lsa None."""
+    if not text:
+        return None
+    parts = text.split(maxsplit=1)
+    if len(parts) == 2 and parts[1].strip():
+        return parts[1].strip()
+    return None
+
+
+def lesson_no_from_payload(payload: str) -> int | None:
+    """`a1_lesson_7` -> 7; noto'g'ri yoki 1..34 dan tashqari bo'lsa None."""
+    match = DEEP_LINK_RE.match(payload)
+    if not match:
+        return None
+    number = int(match.group(1))
+    return number if number in LESSON_BY_NO else None
+
 
 def _full_name(message: Message) -> str | None:
     user = message.from_user
@@ -49,17 +72,28 @@ def _is_stale_file_error(error: TelegramAPIError) -> bool:
     )
 
 
-async def send_lesson_audio(message: Message, lesson_no: int) -> bool:
+async def _deliver_text(message: Message, text: str, keyboard, edit_menu: bool) -> None:
+    """Matnni yuboradi: menyu xabari bo'lsa tahrirlaydi, yangi xabar bo'lsa (masalan
+    /start) yangi xabar sifatida yuboradi."""
+    if edit_menu:
+        await render_message(message, text, keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
+
+async def send_lesson_audio(message: Message, lesson_no: int, *, edit_menu: bool = True) -> bool:
     """Bazadagi `file_id` orqali audioni yuboradi.
 
     True  — audio yuborildi,
     False — audio hali yuklanmagan (yoki yaroqsiz), foydalanuvchiga xabar beriladi.
+
+    `edit_menu=False` — xabar tahrirlanmasin (masalan QR deep linkdagi yangi xabar).
     """
     lesson = LESSON_BY_NO[lesson_no]
     audio = await db.get_audio(lesson_no)
 
     if not audio:
-        await render_message(message, missing_audio_text(lesson), lesson_kb(lesson))
+        await _deliver_text(message, missing_audio_text(lesson), lesson_kb(lesson), edit_menu)
         return False
 
     caption = (audio.get("caption") or "").strip() or lesson_caption(lesson)
@@ -83,7 +117,7 @@ async def send_lesson_audio(message: Message, lesson_no: int) -> bool:
             # Telegram'dagi fayl o'chib ketgan — yozuvni tozalaymiz, admin qayta yuklaydi
             await db.delete_audio(lesson_no)
             logger.warning("%d-dars uchun eskirgan file_id bazadan o'chirildi", lesson_no)
-        await render_message(message, missing_audio_text(lesson), lesson_kb(lesson))
+        await _deliver_text(message, missing_audio_text(lesson), lesson_kb(lesson), edit_menu)
         return False
 
     return True
@@ -101,6 +135,23 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             user.id,
             user.username or "—",
         )
+
+    # QR kod orqali kirish: /start a1_lesson_<1..34>
+    payload = deep_link_payload(message.text)
+    if payload is not None:
+        lesson_no = lesson_no_from_payload(payload)
+        if lesson_no is None:
+            logger.info("Noto'g'ri deep link payload (user=%s): %r", user.id if user else "?", payload[:64])
+        else:
+            lesson = LESSON_BY_NO[lesson_no]
+            logger.info("QR deep link: %r -> %d-dars (user=%s)", payload, lesson_no, user.id if user else "?")
+            await message.answer(
+                f"👋 Assalomu alaykum! QR kod orqali <b>{lesson.label}</b> ga keldingiz 👇\n"
+                f"📚 {lesson.module_no}-Modul: {MODULE_BY_NO[lesson.module_no].title}"
+            )
+            await send_lesson_audio(message, lesson_no, edit_menu=False)
+            return
+
     await message.answer(
         start_text(user.first_name if user else None),
         reply_markup=main_menu_kb(is_admin(user.id if user else None)),

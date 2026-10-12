@@ -45,15 +45,21 @@ ADMIN_IDS=123456789,987654321                     # adminlarning Telegram ID raq
 ## 3. Ishga tushirish
 
 ```bash
-python main.py
+python bot.py
 ```
+
+> `python main.py` ham ishlaydi (bir xil kodga yo'naltiruvchi moslashuvchikilot).
 
 Konsolda quyidagilar chiqadi:
 
 ```
+HTTP server tayyor: http://0.0.0.0:10000/ va /health
 Baza tayyor: /loyiha/bot.db | foydalanuvchilar: 0 | audiolar: 0/34
 Bot ishga tushdi: @sizning_botingiz | 34 dars, 6 modul | adminlar: 1 ta
 ```
+
+Portni Render (`$PORT`) yoki `.env` dagi `PORT` belgilaydi (standart `10000`).
+Tezkor tekshiruv: `curl localhost:10000/health` → `OK` (200).
 
 To'xtatish: `Ctrl + C`. Birinchi ishga tushirishda `bot.db` fayli avtomatik yaratiladi.
 
@@ -72,6 +78,16 @@ To'xtatish: `Ctrl + C`. Birinchi ishga tushirishda `bot.db` fayli avtomatik yara
      (bot xatolik bermaydi).
 4. **🎓 35-Dars: Bitiruv Imtihoni** — imtihonga tayyorlanish yo'riqnomasi.
 5. **📖 Kitob haqida** — kitob tavsifi va audiodan foydalanish tartibi (`/help`, `/yordam`).
+
+**QR kod orqali kirish (deep link):** kitobdagi QR kod `https://t.me/<bot>?start=a1_lesson_7`
+ko'rinishida bo'lsa, bot to'g'ridan-to'g'ri o'sha darsning audiosini yuboradi (1..34):
+
+```
+/start a1_lesson_7   -> 7-Dars audiosi (yoki «⏳ tez orada yuklanadi»)
+```
+
+Notog'ri yoki 1..34 dan tashqari payload berilsa, bot xatolik bermaydi — oddiy bosh menyu
+ko'rsatadi. Har bir QR skanerlanishi logga yoziladi (qaysi dars ko'proq o'qilmoqda).
 
 ## 5. 👑 Admin panel
 
@@ -131,8 +147,9 @@ bir dars uchun yozuv `UPSERT` bilan yangilanadi (takrorlanmaydi).
 
 ```
 .
-├── main.py             # Botni ishga tushirish: routerlar, DB init, polling
-├── database.py         # aiosqlite: users/audios jadvallari, CRUD, statistika
+├── bot.py              # Kirish nuqti: HTTP healthcheck + long-polling (Render: python bot.py)
+├── main.py             # Moslashuvchikilot (python main.py ham ishlaydi)
+├── database.py         # aiosqlite: users/audios jadvallari, CRUD, backup/restore, statistika
 ├── handlers_user.py    # O'quvchilar: /start, modul/dars menyusi, audio yetkazish
 ├── handlers_admin.py   # Admin panel: audio FSM, o'chirish, statistika, broadcast
 ├── lessons.py          # 6 modul / 34 dars ma'lumoti, matnlar, klaviaturalar
@@ -182,28 +199,34 @@ bir necha bosqichda bo'ladi:
 2. [Render Dashboard](https://dashboard.render.com) → **New +** → **Blueprint** → reponi tanlang → **Apply**.
 3. Render **BOT_TOKEN** va **ADMIN_IDS** qiymatlarini so'raydi (ular `render.yaml` da
    `sync: false` bilan belgilangan — gitga tushmaydi). Kiriting.
-4. Loglarda `Bot ishga tushdi: @... | 34 dars, 6 modul | adminlar: 1 ta` chiqsa — tayyor.
+4. Loglarda `HTTP server tayyor: ... /health` va `Bot ishga tushdi: @... | 34 dars, 6 modul | adminlar: 1 ta` chiqsa — tayyor.
 5. Telegram'da botga `/admin` yuborib, audiolarni yuklashni boshlang.
+6. **Environment** bo'limiga `BOT_TOKEN` va `ADMIN_IDS` ni kiriting (`render.yaml` da
+   `sync: false`), so'ng **Manual/Redeploy** — logda `HTTP server tayyor: http://0.0.0.0:PORT/ va /health`
+   va `Bot ishga tushdi: @...` ko'rinadi.
 
 | Sozlama | Qiymat |
 |---|---|
-| Service type | **Background Worker** — bot long-polling bilan ishlaydi, port tinglamaydi |
+| Service type | **Web Service** — `bot.py` `$PORT` da healthcheck ochadi va polling bilan parallel ishlaydi |
 | Build command | `pip install -r requirements.txt` |
-| Start command | `python main.py` |
+| Start command | `python bot.py` |
+| Health check | **`/health`** (`GET /` ham `200 OK` qaytaradi) |
 | Persistent disk | `bot-data` → `/var/data` (1 GB) |
-| Environment | `DB_PATH=/var/data/bot.db`, `BOT_TOKEN`, `ADMIN_IDS` |
+| Environment | `BOT_TOKEN`, `ADMIN_IDS`, `DB_PATH=/var/data/bot.db` (PORT'ni Render o'zi beradi) |
 
 ### ⚠️ Baza, disk va tarif haqida
 
 - SQLite baza `DB_PATH=/var/data/bot.db` — **doimiy diskda**, shuning uchun redeploy va
   restartlarda foydalanuvchilar hamda yuklangan `file_id` lar saqlanib qoladi.
-- **Doimiy disk faqat pullik compute planda ishlaydi.** Disksiz (bepul) web service'da har
-  deplo'yda baza o'chadi: userlar yo'qoladi va admin 34 audioni qaytadan yuklashi kerak bo'ladi.
-- Render'da **Background Worker bepul tarifda yo'q** (eng arzon plan ~$7/oy, 0.5 CPU / 512 MB).
-  Bepul **Web Service** esa bot uchun yaroqsiz: 15 daqiqa trafik bo'lmasa uxlab qoladi,
-  port talab qiladi va disk ulab bo'lmaydi.
+- **Doimiy disk faqat pullik compute planda ishlaydi.** Disksiz xizmatda har deplo'yda baza
+  o'chadi: userlar yo'qoladi va admin 34 audioni qaytadan yuklashi kerak bo'ladi.
+- **Port muammosi hal qilindi:** Render `Port scan timeout` berardi, chunki bot HTTP ochmasdi.
+  Endi `bot.py` `$PORT` da `/` va `/health` (`200 OK`) ochadi — xizmat sog'lom deb topiladi.
+- Render'da **bepul tarifda disk yo'q** va web service **~15 daqiqa trafik bo'lmasa uxlab qoladi**
+  (bunda bot javob bermaydi) — barqaror ishlash uchun pullik plan (~$7/oy) yoki boshqa hosting
+  tavsiya etiladi.
 - Bepul variant kerak bo'lsa: kichik VPS (Hetzner, Oracle free tier), Railway, Fly.io yoki uy
-  serveri — hammasida `python main.py` ni `systemd`/Docker bilan uzluksiz ishga tushiring.
+  serveri — hammasida `python bot.py` ni `systemd`/Docker bilan uzluksiz ishga tushiring.
 - Boshqa region kerak bo'lsa `render.yaml` dagi `region` (hozir `frankfurt`) qiymatini o'zgartiring.
 - **Baza ochilmasa bot yiqilmaydi:** agar `DB_PATH` papkasi yaratilmasa (masalan disk ulanmagan),
   bot ogohlantirish yozib lokal `bot.db` ga o'tadi va ishlashda davom etadi — bunda baza saqlanmaydi,
